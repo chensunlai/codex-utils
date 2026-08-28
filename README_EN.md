@@ -34,6 +34,8 @@ The command detects the OS and CPU architecture, verifies the release against `c
 
 ## TUI controls
 
+The first screen lets you choose **简体中文** or **English**.
+
 | Key | Action |
 | --- | --- |
 | `Up` / `Down` or `k` / `j` | Move selection |

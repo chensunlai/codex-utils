@@ -34,7 +34,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.gi
 
 ## TUI 操作
 
-打开工具后可使用：
+启动时先选择 **简体中文** 或 **English**。进入主菜单后可使用：
 
 | 按键 | 操作 |
 | --- | --- |
