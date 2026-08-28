@@ -39,5 +39,19 @@ jobs:
           if ($remaining.Count -ne 0) {
               throw "Temporary runner left $($remaining.Count) item(s) behind"
           }
+      - name: Smoke test Windows PowerShell one-liner
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP "codex-utils-windows-powershell-test"
+          New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+          $env:TEMP = $tempRoot
+          $env:TMP = $tempRoot
+          $scriptUrl = "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/run.ps1"
+          Invoke-Expression (Invoke-RestMethod $scriptUrl)
+          $remaining = @(Get-ChildItem -Force $tempRoot)
+          if ($remaining.Count -ne 0) {
+              throw "Temporary runner left $($remaining.Count) item(s) behind"
+          }
       - if: runner.os == 'Linux'
         run: go vet ./...
