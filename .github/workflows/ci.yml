@@ -23,5 +23,21 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - run: go test ./...
+      - name: Validate temporary runner
+        if: runner.os == 'Linux'
+        run: sh -n scripts/run.sh
+      - name: Smoke test temporary runner cleanup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP "codex-utils-run-test"
+          New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+          $env:TEMP = $tempRoot
+          $env:TMP = $tempRoot
+          & ./scripts/run.ps1
+          $remaining = @(Get-ChildItem -Force $tempRoot)
+          if ($remaining.Count -ne 0) {
+              throw "Temporary runner left $($remaining.Count) item(s) behind"
+          }
       - if: runner.os == 'Linux'
         run: go vet ./...

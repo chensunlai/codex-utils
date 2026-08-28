@@ -10,45 +10,31 @@
 
 程序默认打开键盘操作的终端界面，同时提供适合脚本和自动化的子命令。Release 是独立二进制文件，Windows CMD、PowerShell、Linux/Ubuntu 和 macOS 用户不需要安装 Go、Python 或其他运行时。
 
-## 一键安装并运行
+## 一键临时运行
 
 ### Linux / Ubuntu / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.sh | sh && "$HOME/.local/bin/codex-utils"
-```
-
-安装位置默认为 `~/.local/bin/codex-utils`。以后直接运行：
-
-```bash
-codex-utils
-```
-
-如果 `~/.local/bin` 尚未加入 `PATH`，也可以继续使用完整路径，或将下面一行加入 shell 配置：
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/run.sh | sh
 ```
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.ps1 | iex; codex-utils
+iex (irm 'https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/run.ps1')
 ```
-
-安装器会把 `%LOCALAPPDATA%\codex-utils\bin` 加入当前进程和用户 `PATH`。
 
 ### Windows CMD
 
 ```cmd
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.ps1' | iex; codex-utils"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/run.ps1')"
 ```
 
-安装脚本会根据系统和 CPU 架构下载对应 Release，并用 `checksums.txt` 校验 SHA-256。
+命令会根据系统和 CPU 架构下载对应 Release、校验 SHA-256，然后直接进入 TUI。所有下载内容只保存在系统临时目录，退出工具后自动删除，不写入 `PATH`，不保留程序文件。
 
 ## TUI 操作
 
-直接运行 `codex-utils` 后可使用：
+打开工具后可使用：
 
 | 按键 | 操作 |
 | --- | --- |
@@ -122,31 +108,6 @@ codex-utils
 ```
 
 如果配置文件不存在，扫描会使用保守默认值 `openai` / `gpt-5`，并在状态页明确显示。
-
-## 固定版本或自定义安装目录
-
-Linux / macOS：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.sh | \
-  CODEX_UTILS_VERSION=v0.1.0 CODEX_UTILS_INSTALL_DIR="$HOME/bin" sh
-```
-
-通过管道执行时，环境变量需要导出才能传入子进程：
-
-```bash
-export CODEX_UTILS_VERSION=v0.1.0
-export CODEX_UTILS_INSTALL_DIR="$HOME/bin"
-curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.sh | sh
-```
-
-PowerShell：
-
-```powershell
-$env:CODEX_UTILS_VERSION = "v0.1.0"
-$env:CODEX_UTILS_INSTALL_DIR = "$HOME\bin"
-irm https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.ps1 | iex
-```
 
 ## 手动下载
 

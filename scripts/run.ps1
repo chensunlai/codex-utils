@@ -2,11 +2,6 @@ $ErrorActionPreference = "Stop"
 
 $Repository = "chensunlai/codex-utils"
 $Version = if ($env:CODEX_UTILS_VERSION) { $env:CODEX_UTILS_VERSION } else { "latest" }
-$InstallDir = if ($env:CODEX_UTILS_INSTALL_DIR) {
-    $env:CODEX_UTILS_INSTALL_DIR
-} else {
-    Join-Path $env:LOCALAPPDATA "codex-utils\bin"
-}
 
 $Architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 switch ($Architecture) {
@@ -28,7 +23,7 @@ New-Item -ItemType Directory -Path $Temporary | Out-Null
 try {
     $Archive = Join-Path $Temporary $Asset
     $Checksums = Join-Path $Temporary "checksums.txt"
-    Write-Host "Downloading $Asset..."
+    Write-Host "Downloading temporary codex-utils..."
     Invoke-WebRequest -UseBasicParsing -Uri "$DownloadBase/$Asset" -OutFile $Archive
     Invoke-WebRequest -UseBasicParsing -Uri "$DownloadBase/checksums.txt" -OutFile $Checksums
 
@@ -47,20 +42,11 @@ try {
 
     $Expanded = Join-Path $Temporary "expanded"
     Expand-Archive -Path $Archive -DestinationPath $Expanded -Force
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    $Destination = Join-Path $InstallDir "codex-utils.exe"
-    Copy-Item (Join-Path $Expanded "codex-utils.exe") $Destination -Force
-
-    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $PathEntries = if ($UserPath) { $UserPath -split ";" } else { @() }
-    if (-not ($PathEntries | Where-Object { $_.TrimEnd("\") -ieq $InstallDir.TrimEnd("\") })) {
-        $NewPath = if ($UserPath) { "$UserPath;$InstallDir" } else { $InstallDir }
-        [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+    $Executable = Join-Path $Expanded "codex-utils.exe"
+    & $Executable
+    if ($LASTEXITCODE -ne 0) {
+        throw "codex-utils exited with code $LASTEXITCODE"
     }
-    if (-not (($env:Path -split ";") | Where-Object { $_.TrimEnd("\") -ieq $InstallDir.TrimEnd("\") })) {
-        $env:Path = "$InstallDir;$env:Path"
-    }
-    Write-Host "Installed codex-utils to $Destination"
 } finally {
     Remove-Item $Temporary -Recurse -Force -ErrorAction SilentlyContinue
 }

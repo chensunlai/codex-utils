@@ -10,29 +10,27 @@ English | [简体中文](README.md)
 
 The standalone release binaries run in Windows CMD, PowerShell, Linux/Ubuntu, and macOS without Go, Python, or another runtime. Running the command without arguments opens an interactive terminal UI; subcommands are available for scripts.
 
-## Install and run
+## Run temporarily
 
 ### Linux / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.sh | sh && "$HOME/.local/bin/codex-utils"
+curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/run.sh | sh
 ```
-
-The default installation path is `~/.local/bin/codex-utils`.
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.ps1 | iex; codex-utils
+iex (irm 'https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/run.ps1')
 ```
 
 ### Windows CMD
 
 ```cmd
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.ps1' | iex; codex-utils"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/run.ps1')"
 ```
 
-Both installers detect the OS and CPU architecture and verify the downloaded release against `checksums.txt` before installing it.
+The command detects the OS and CPU architecture, verifies the release against `checksums.txt`, and opens the TUI. Downloads stay in the system temporary directory and are deleted when the tool exits. It does not update `PATH` or leave a program file behind.
 
 ## TUI controls
 
@@ -84,22 +82,6 @@ CODEX_HOME=/path/to/.codex codex-utils preview
 ```
 
 When `config.toml` is missing, inspection uses conservative `openai` / `gpt-5` defaults and displays them explicitly.
-
-## Pinning a version
-
-The installers accept `CODEX_UTILS_VERSION` and `CODEX_UTILS_INSTALL_DIR`.
-
-```bash
-export CODEX_UTILS_VERSION=v0.1.0
-export CODEX_UTILS_INSTALL_DIR="$HOME/bin"
-curl -fsSL https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.sh | sh
-```
-
-```powershell
-$env:CODEX_UTILS_VERSION = "v0.1.0"
-$env:CODEX_UTILS_INSTALL_DIR = "$HOME\bin"
-irm https://raw.githubusercontent.com/chensunlai/codex-utils/main/scripts/install.ps1 | iex
-```
 
 ## Release files
 

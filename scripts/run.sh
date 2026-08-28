@@ -3,7 +3,6 @@ set -eu
 
 repository="chensunlai/codex-utils"
 version="${CODEX_UTILS_VERSION:-latest}"
-install_dir="${CODEX_UTILS_INSTALL_DIR:-$HOME/.local/bin}"
 
 case "$(uname -s)" in
   Linux) os="linux" ;;
@@ -26,11 +25,17 @@ else
 fi
 
 temporary="$(mktemp -d 2>/dev/null || mktemp -d -t codex-utils)"
-trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+cleanup() {
+  rm -rf "$temporary"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-printf 'Downloading %s...\n' "$asset"
-curl -fL --retry 3 --connect-timeout 15 -o "$temporary/$asset" "$download_base/$asset"
-curl -fL --retry 3 --connect-timeout 15 -o "$temporary/checksums.txt" "$download_base/checksums.txt"
+printf 'Downloading temporary codex-utils...\n'
+curl -fsSL --retry 3 --connect-timeout 15 -o "$temporary/$asset" "$download_base/$asset"
+curl -fsSL --retry 3 --connect-timeout 15 -o "$temporary/checksums.txt" "$download_base/checksums.txt"
 
 expected="$(awk -v name="$asset" '$2 == name { print $1; exit }' "$temporary/checksums.txt")"
 if [ -z "$expected" ]; then
@@ -50,11 +55,12 @@ if [ "$expected" != "$actual" ]; then
 fi
 
 tar -xzf "$temporary/$asset" -C "$temporary" codex-utils
-mkdir -p "$install_dir"
-install -m 0755 "$temporary/codex-utils" "$install_dir/codex-utils"
+chmod 0755 "$temporary/codex-utils"
 
-printf 'Installed codex-utils to %s\n' "$install_dir/codex-utils"
-case ":$PATH:" in
-  *":$install_dir:"*) ;;
-  *) printf 'Add %s to PATH, or run the binary by its full path.\n' "$install_dir" ;;
-esac
+if [ "$#" -gt 0 ]; then
+  "$temporary/codex-utils" "$@"
+elif [ -r /dev/tty ]; then
+  "$temporary/codex-utils" </dev/tty
+else
+  "$temporary/codex-utils"
+fi
