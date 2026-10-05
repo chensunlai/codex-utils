@@ -26,6 +26,7 @@ var stateTransferTables = []transferTable{
 }
 
 var historyTransferTables = []transferTable{
+	{"thread_turns", "thread_id"},
 	{"thread_items", "thread_id"},
 	{"thread_realtime_items", "thread_id"},
 	{"thread_history_projection_state", "thread_id"},
@@ -203,7 +204,7 @@ func insertDatabaseRecord(transaction *sql.Tx, table string, row map[string]any,
 		names = append(names, quoteIdentifier(key))
 		values = append(values, row[key])
 	}
-	query := "INSERT INTO " + table + " (" + strings.Join(names, ",") + ") VALUES (" + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")"
+	query := "INSERT INTO " + table + " (" + strings.Join(names, ",") + ") VALUES (" + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ") ON CONFLICT DO NOTHING"
 	_, err := transaction.Exec(query, values...)
 	return err
 }
@@ -307,7 +308,7 @@ func destinationColumns(transaction *sql.Tx, schema, table string) (map[string]b
 	return columns, nil
 }
 
-func mergeTransferDatabase(transaction *sql.Tx, schema, source, name string, sessions map[string]archiveSession, primary map[string]string, cwd string) error {
+func mergeTransferDatabase(transaction *sql.Tx, schema, source, name string, sessions map[string]archiveSession, primary map[string]string, cwd, provider string, reindex map[string]bool) error {
 	var database *sql.DB
 	var err error
 	if source != "" {
@@ -328,6 +329,13 @@ func mergeTransferDatabase(transaction *sql.Tx, schema, source, name string, ses
 			}
 			continue
 		}
+		if name == historyDBName {
+			for id := range reindex {
+				if _, err := transaction.Exec("DELETE FROM "+schema+"."+quoteIdentifier(table.Name)+" WHERE thread_id = ?", id); err != nil {
+					return err
+				}
+			}
+		}
 		var rows []map[string]any
 		if database != nil {
 			sourceColumns, err := tableColumns(database, table.Name)
@@ -345,8 +353,28 @@ func mergeTransferDatabase(transaction *sql.Tx, schema, source, name string, ses
 		for _, row := range rows {
 			id := databaseString(row[table.Key])
 			session, selected := sessions[id]
-			if !selected {
+			if !selected || (name == historyDBName && reindex[id]) {
 				continue
+			}
+			if table.Name == "thread_history_projection_state" {
+				turnColumns, err := tableColumns(database, "thread_turns")
+				if err != nil {
+					return err
+				}
+				var turns int
+				if len(turnColumns) > 0 {
+					if err := database.QueryRow("SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?", id).Scan(&turns); err != nil {
+						return err
+					}
+				}
+				if turns == 0 {
+					// v0.2.0 archives omitted turns but retained the projection
+					// cursor. Let Codex rebuild the index from intact rollouts.
+					if _, err := transaction.Exec("DELETE FROM "+schema+".thread_history_projection_state WHERE thread_id = ?", id); err != nil {
+						return err
+					}
+					continue
+				}
 			}
 			if table.Name == "threads" {
 				var exists int
@@ -355,9 +383,20 @@ func mergeTransferDatabase(transaction *sql.Tx, schema, source, name string, ses
 				}
 				seen[id] = true
 				if exists != 0 {
+					if columns["model_provider"] {
+						if _, err := transaction.Exec("UPDATE "+schema+".threads SET model_provider = ? WHERE id = ?", provider, id); err != nil {
+							return err
+						}
+					}
+					if cwd != "" && columns["cwd"] {
+						if _, err := transaction.Exec("UPDATE "+schema+".threads SET cwd = ? WHERE id = ?", cwd, id); err != nil {
+							return err
+						}
+					}
 					continue
 				}
 				prepareImportedThread(row, session, primary[id], cwd)
+				row["model_provider"] = provider
 			}
 			if err := insertDatabaseRecord(transaction, schema+"."+quoteIdentifier(table.Name), row, columns); err != nil {
 				return fmt.Errorf("import %s/%s: %w", name, table.Name, err)
@@ -370,6 +409,7 @@ func mergeTransferDatabase(transaction *sql.Tx, schema, source, name string, ses
 				}
 				row := fallbackThread(session)
 				prepareImportedThread(row, session, primary[id], cwd)
+				row["model_provider"] = provider
 				if err := insertDatabaseRecord(transaction, schema+".threads", row, columns); err != nil {
 					return fmt.Errorf("register conversation %s: %w", id, err)
 				}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/chensunlai/codex-utils/internal/history"
 )
 
@@ -36,6 +37,24 @@ func TestSessionSelectionSupportsMultipleConversationsAndKeepsSelectionOnBack(t 
 		m = updated.(model)
 		if len(m.selectedSessionIDs()) != count {
 			t.Fatalf("select all toggle = %v", m.selectedSessionIDs())
+		}
+	}
+}
+
+func TestSessionSelectionKeepsLongChineseTitlesOnOneLine(t *testing.T) {
+	m := modelWithInspection()
+	m.screen = sessionsScreen
+	m.sessions = []history.Session{{ID: "one", Title: "帮我分析我的C盘目录\n" + strings.Repeat("哪些东西占据的比较多\t", 20)}}
+	for _, width := range []int{32, 80} {
+		view := ansi.Strip(m.sessionSelectionView(width))
+		var title string
+		for _, line := range strings.Split(view, "\n") {
+			if strings.HasPrefix(line, "> [ ] ") {
+				title = line
+			}
+		}
+		if !strings.Contains(title, "帮我分析") || !strings.HasSuffix(title, "…") || ansi.StringWidth(title) > width {
+			t.Fatalf("title wraps at width %d: %q", width, title)
 		}
 	}
 }

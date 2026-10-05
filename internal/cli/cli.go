@@ -189,7 +189,8 @@ func runImport(paths history.Paths, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("Conversations added: %d\nIdentical skipped:   %d\nHistory dependencies: %d\n", stats.Added, stats.Skipped, stats.Dependencies)
+	fmt.Printf("Conversations added: %d\nAlready present:     %d\nProvider adapted:    %d\nHistory dependencies: %d\n", stats.Added, stats.Skipped, stats.Adapted, stats.Dependencies)
+	fmt.Println("Restart Codex after importing, then open the conversation.")
 	return 0
 }
 

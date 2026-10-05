@@ -54,6 +54,7 @@ type ExportStats struct {
 type ImportStats struct {
 	Added        int
 	Skipped      int
+	Adapted      int
 	Dependencies int
 }
 
@@ -241,7 +242,7 @@ func collectSessionDependencies(catalog map[string]*sessionRecord, selected map[
 }
 
 func historyDependencyRecord(catalog map[string]*sessionRecord, base *historyBase) *sessionRecord {
-	if record := catalog[base.ThreadID]; record != nil && hasHistoryBoundary(record.Files, base) {
+	if record := catalog[base.ThreadID]; record != nil && hasHistoryBoundary(historyReferenceFiles(record.Files, base.ThreadID), base) {
 		return record
 	}
 	// A rotated rollout can have its own file ID while session_meta.id still
@@ -256,6 +257,20 @@ func historyDependencyRecord(catalog map[string]*sessionRecord, base *historyBas
 		}
 	}
 	return nil
+}
+
+func historyReferenceFiles(files []*sessionFile, id string) []*sessionFile {
+	var exact []*sessionFile
+	for _, file := range files {
+		stem := strings.TrimSuffix(filepath.Base(file.Path), ".jsonl")
+		if strings.HasSuffix(stem, "-"+id) || strings.HasSuffix(stem, "_"+id) {
+			exact = append(exact, file)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return files
 }
 
 func hasHistoryBoundary(files []*sessionFile, base *historyBase) bool {
@@ -512,6 +527,10 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 	if err != nil {
 		return stats, err
 	}
+	settings, err := LoadModelSettings(paths.Config)
+	if err != nil {
+		return stats, err
+	}
 	catalog, err := readSessionCatalog(paths)
 	if err != nil {
 		return stats, err
@@ -526,14 +545,47 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 	}
 	primary := make(map[string]string)
 	register := make(map[string]archiveSession)
+	var existingFiles []*sessionFile
 	var additions []string
+	type originalLocation struct {
+		Header rolloutHeader
+		Length int
+	}
+	originalLocations := make(map[string]originalLocation)
+	for _, session := range manifest.Sessions {
+		for _, name := range session.Files {
+			header, err := readSessionHeader(filepath.Join(stage, filepath.FromSlash(name)))
+			if err != nil {
+				return stats, err
+			}
+			var meta rolloutHeader
+			if err := json.Unmarshal(header, &meta); err != nil {
+				return stats, err
+			}
+			originalLocations[name] = originalLocation{meta, len(header)}
+		}
+	}
 	for _, session := range manifest.Sessions {
 		existing := catalog[session.ID]
 		if existing != nil {
-			if !sameSessionFiles(existing.Files, session.Files, checksums) {
+			if !sameSessionFiles(existing.Files, session.Files, checksums, stage) {
 				return ImportStats{}, fmt.Errorf("conversation %s already exists with different history; no conversations were imported", session.ID)
 			}
 			primary[session.ID] = existing.Primary.Path
+			existingFiles = append(existingFiles, existing.Files...)
+			for _, file := range existing.Files {
+				header, err := readSessionHeader(file.Path)
+				if err != nil {
+					return stats, err
+				}
+				for _, name := range session.Files {
+					if path.Base(name) == filepath.Base(file.Path) {
+						if err := replaceSessionHeader(filepath.Join(stage, filepath.FromSlash(name)), header); err != nil {
+							return stats, err
+						}
+					}
+				}
+			}
 			stats.Skipped++
 		} else {
 			if threads[session.ID] != nil {
@@ -554,8 +606,28 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 			primary[session.ID] = importedRolloutPath(paths, session.Primary)
 			stats.Added++
 		}
-		if threads[session.ID] == nil {
-			register[session.ID] = session
+		register[session.ID] = session
+	}
+	if err := relocateSessionCwd(stage, manifest, cwd); err != nil {
+		return stats, err
+	}
+	reindex := make(map[string]bool)
+	for _, session := range manifest.Sessions {
+		for _, name := range session.Files {
+			header, err := readSessionHeader(filepath.Join(stage, filepath.FromSlash(name)))
+			if err != nil {
+				return stats, err
+			}
+			var meta rolloutHeader
+			if err := json.Unmarshal(header, &meta); err != nil {
+				return stats, err
+			}
+			original := originalLocations[name]
+			baseBefore, _ := json.Marshal(original.Header.Payload.HistoryBase)
+			baseAfter, _ := json.Marshal(meta.Payload.HistoryBase)
+			if original.Length != len(header) || original.Header.Payload.Cwd != meta.Payload.Cwd || !bytes.Equal(baseBefore, baseAfter) {
+				reindex[session.ID] = true
+			}
 		}
 	}
 	stats.Dependencies = len(manifest.Sessions) - len(manifest.Selected)
@@ -566,10 +638,13 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 	indexExisted := fileExists(paths.SessionIndex)
 	desiredIndex := append([]byte(nil), originalIndex...)
 	for _, session := range manifest.Sessions {
-		if index[session.ID] != nil {
+		if index[session.ID] != nil && cwd == "" {
 			continue
 		}
 		row := cloneMap(session.Index)
+		if index[session.ID] != nil {
+			row = cloneMap(index[session.ID])
+		}
 		row["id"] = session.ID
 		if valueString(row["thread_name"]) == "" {
 			row["thread_name"] = session.Title
@@ -577,6 +652,7 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 		row["updated_at"] = session.UpdatedAt
 		row["rollout_path"] = primary[session.ID]
 		row["cwd"] = session.Cwd
+		row["model_provider"] = settings.Provider
 		if cwd != "" {
 			row["cwd"] = cwd
 		}
@@ -595,10 +671,19 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 	}
 	var created []string
 	var newDatabases []string
+	originalFiles := make(map[string]string)
 	indexChanged := false
 	defer func() {
 		if retErr == nil {
 			return
+		}
+		for filePath, backup := range originalFiles {
+			file, err := os.Open(backup)
+			if err == nil {
+				err = atomicWriteReader(filePath, file, existingMode(filePath))
+				_ = file.Close()
+			}
+			retErr = errors.Join(retErr, err)
 		}
 		if indexChanged {
 			if indexExisted {
@@ -659,13 +744,66 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 			if !fileExists(source) {
 				source = ""
 			}
-			if err := mergeTransferDatabase(transaction, schema, source, name, register, primary, cwd); err != nil {
+			if err := mergeTransferDatabase(transaction, schema, source, name, register, primary, cwd, settings.Provider, reindex); err != nil {
 				return stats, err
 			}
 		}
 	}
+	adapted := make(map[string]bool)
+	for _, session := range manifest.Sessions {
+		for _, name := range session.Files {
+			changed, err := adaptSessionProvider(filepath.Join(stage, filepath.FromSlash(name)), settings.Provider)
+			if err != nil {
+				return stats, err
+			}
+			if changed {
+				adapted[session.ID] = true
+			}
+		}
+	}
+	for _, file := range existingFiles {
+		var stagedPath string
+		for _, name := range register[file.Header.Payload.ID].Files {
+			if path.Base(name) == filepath.Base(file.Path) {
+				stagedPath = filepath.Join(stage, filepath.FromSlash(name))
+				break
+			}
+		}
+		before, err := readSessionHeader(file.Path)
+		if err != nil {
+			return stats, err
+		}
+		after, err := readSessionHeader(stagedPath)
+		if err != nil {
+			return stats, err
+		}
+		if bytes.Equal(before, after) {
+			continue
+		}
+		input, err := os.Open(file.Path)
+		if err != nil {
+			return stats, err
+		}
+		backup := filepath.Join(stage, "originals", filepath.Base(file.Path))
+		err = writeNewFile(backup, input)
+		_ = input.Close()
+		if err != nil {
+			return stats, err
+		}
+		originalFiles[file.Path] = backup
+		staged, err := os.Open(stagedPath)
+		if err != nil {
+			return stats, err
+		}
+		err = atomicWriteReader(file.Path, staged, existingMode(file.Path))
+		_ = staged.Close()
+		if err != nil {
+			return stats, err
+		}
+	}
 	for _, name := range additions {
-		input, err := os.Open(filepath.Join(stage, filepath.FromSlash(name)))
+		stagedPath := filepath.Join(stage, filepath.FromSlash(name))
+		input, err := os.Open(stagedPath)
 		if err != nil {
 			return stats, err
 		}
@@ -686,10 +824,11 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 	if err := transaction.Commit(); err != nil {
 		return stats, err
 	}
+	stats.Adapted = len(adapted)
 	return stats, nil
 }
 
-func sameSessionFiles(existing []*sessionFile, names []string, checksums map[string]archiveFile) bool {
+func sameSessionFiles(existing []*sessionFile, names []string, checksums map[string]archiveFile, stage string) bool {
 	if len(existing) != len(names) {
 		return false
 	}
@@ -700,7 +839,7 @@ func sameSessionFiles(existing []*sessionFile, names []string, checksums map[str
 	for _, name := range names {
 		file := byName[path.Base(name)]
 		entry := checksums[name]
-		if file == nil || file.Size != entry.Size {
+		if file == nil {
 			return false
 		}
 		input, err := os.Open(file.Path)
@@ -710,11 +849,56 @@ func sameSessionFiles(existing []*sessionFile, names []string, checksums map[str
 		hash := sha256.New()
 		_, err = io.Copy(hash, input)
 		_ = input.Close()
-		if err != nil || hex.EncodeToString(hash.Sum(nil)) != entry.SHA256 {
+		if err != nil {
+			return false
+		}
+		if hex.EncodeToString(hash.Sum(nil)) != entry.SHA256 && !sameSessionHistory(file.Path, filepath.Join(stage, filepath.FromSlash(name))) {
 			return false
 		}
 	}
 	return true
+}
+
+func sameSessionHistory(first, second string) bool {
+	var hashes [][]byte
+	var headers [][]byte
+	for _, filePath := range []string{first, second} {
+		file, err := os.Open(filePath)
+		if err != nil {
+			return false
+		}
+		reader := bufio.NewReader(file)
+		line, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			_ = file.Close()
+			return false
+		}
+		neutral, err := providerNeutralHeader(line, "")
+		var header map[string]any
+		if err != nil || json.Unmarshal(neutral, &header) != nil {
+			_ = file.Close()
+			return false
+		}
+		payload := header["payload"].(map[string]any)
+		delete(payload, "cwd")
+		if base, ok := payload["history_base"].(map[string]any); ok {
+			delete(base, "end_byte_offset")
+		}
+		encoded, err := marshalCompactJSON(header)
+		if err != nil {
+			_ = file.Close()
+			return false
+		}
+		headers = append(headers, encoded)
+		hash := sha256.New()
+		_, err = io.Copy(hash, reader)
+		_ = file.Close()
+		if err != nil {
+			return false
+		}
+		hashes = append(hashes, hash.Sum(nil))
+	}
+	return bytes.Equal(headers[0], headers[1]) && bytes.Equal(hashes[0], hashes[1])
 }
 
 func writeNewFile(target string, input io.Reader) (retErr error) {

@@ -33,6 +33,7 @@ func transferTestHistoryDatabase(t *testing.T, paths Paths) *sql.DB {
 	t.Helper()
 	database := openTestDatabase(t, filepath.Join(paths.Home, historyDBName))
 	mustExec(t, database, `CREATE TABLE thread_items (thread_id TEXT, turn_id TEXT, item_id TEXT, rollout_ordinal INTEGER, item_json TEXT, PRIMARY KEY(thread_id, turn_id, item_id))`)
+	mustExec(t, database, `CREATE TABLE thread_turns (thread_id TEXT, turn_id TEXT, rollout_ordinal INTEGER, status TEXT, rollout_byte_offset INTEGER, rollout_end_byte_offset INTEGER, PRIMARY KEY(thread_id, turn_id))`)
 	mustExec(t, database, `CREATE TABLE thread_history_projection_state (thread_id TEXT PRIMARY KEY, next_rollout_byte_offset INTEGER, next_rollout_ordinal INTEGER)`)
 	return database
 }
@@ -118,7 +119,7 @@ func TestSessionArchiveAddsMultipleConversationsWithoutReplacingLocalHistory(t *
 			t.Fatalf("imported metadata = %#v", row)
 		}
 		rollout := databaseString(row["rollout_path"])
-		if !strings.HasPrefix(rollout, destination.Home) || !bytes.Equal(readFile(t, rollout), readFile(t, filepath.Join(source.SessionsDir, "2026", "10", "05", "rollout-"+id+".jsonl"))) {
+		if !strings.HasPrefix(rollout, destination.Home) || !sameSessionHistory(rollout, filepath.Join(source.SessionsDir, "2026", "10", "05", "rollout-"+id+".jsonl")) || row["model_provider"] != DefaultProvider {
 			t.Fatalf("rollout path or content changed: %s", rollout)
 		}
 	}
@@ -147,6 +148,7 @@ func TestSessionArchivePreservesForkChainsAndRolloutSegments(t *testing.T) {
 	for id, rollout := range map[string]string{"root": root, "branch": segment, "leaf": leaf} {
 		insertTransferThread(t, state, id, rollout)
 		mustExec(t, history, `INSERT INTO thread_items VALUES (?, 'turn', 'item', 8, '{"content":"keep"}')`, id)
+		mustExec(t, history, `INSERT INTO thread_turns VALUES (?, 'turn', 7, 'completed', 100, 200)`, id)
 		mustExec(t, history, `INSERT INTO thread_history_projection_state VALUES (?, ?, 9)`, id, len(readFile(t, rollout)))
 	}
 	state.Close()
@@ -166,7 +168,8 @@ func TestSessionArchivePreservesForkChainsAndRolloutSegments(t *testing.T) {
 	}
 	for _, rollout := range []string{root, branch, segment, leaf} {
 		relative, _ := filepath.Rel(source.Home, rollout)
-		if !bytes.Equal(readFile(t, rollout), readFile(t, filepath.Join(destination.Home, relative))) {
+		importedPath := filepath.Join(destination.Home, relative)
+		if !sameSessionHistory(rollout, importedPath) || len(readFile(t, rollout)) != len(readFile(t, importedPath)) {
 			t.Fatalf("fork byte offsets invalidated: %s", rollout)
 		}
 	}
@@ -184,6 +187,9 @@ func TestSessionArchivePreservesForkChainsAndRolloutSegments(t *testing.T) {
 	defer history.Close()
 	if err := history.QueryRow("SELECT COUNT(*) FROM thread_items").Scan(&count); err != nil || count != 3 {
 		t.Fatalf("history item count = %d, %v", count, err)
+	}
+	if err := history.QueryRow("SELECT COUNT(*) FROM thread_turns WHERE rollout_byte_offset=100 AND rollout_end_byte_offset=200").Scan(&count); err != nil || count != 3 {
+		t.Fatalf("history turn count = %d, %v", count, err)
 	}
 	var offset int64
 	if err := history.QueryRow("SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id='branch'").Scan(&offset); err != nil || offset != segmentSize {
@@ -440,7 +446,8 @@ func TestSessionArchivePreservesHistoryWithStaleByteOffsets(t *testing.T) {
 	}
 	for _, file := range []string{root, branch} {
 		relative, _ := filepath.Rel(source.Home, file)
-		if !bytes.Equal(readFile(t, file), readFile(t, filepath.Join(destination.Home, relative))) {
+		importedPath := filepath.Join(destination.Home, relative)
+		if !sameSessionHistory(file, importedPath) || len(readFile(t, file)) != len(readFile(t, importedPath)) {
 			t.Fatal("migration changed existing history or references")
 		}
 	}

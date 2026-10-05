@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/chensunlai/codex-utils/internal/history"
 )
 
@@ -134,8 +135,8 @@ func (m model) sessionSelectionView(width int) string {
 		if i == m.cursor {
 			prefix = ">" + prefix[1:]
 		}
-		title := strings.ReplaceAll(strings.ReplaceAll(session.Title, "\n", " "), "\r", " ")
-		line := prefix + title
+		title := strings.Join(strings.Fields(session.Title), " ")
+		line := prefix + ansi.Truncate(title, max(0, width-6), "…")
 		if i == m.cursor {
 			line = activeStyle.Render(line)
 		}
@@ -183,10 +184,11 @@ func exportCommand(paths history.Paths, ids []string, output string, selectedLan
 func importCommand(paths history.Paths, archive, cwd string, selectedLanguage language) tea.Cmd {
 	return func() tea.Msg {
 		stats, err := history.ImportSessions(paths, archive, cwd)
-		body := fmt.Sprintf("Added: %d\nIdentical skipped: %d\nHistory dependencies: %d", stats.Added, stats.Skipped, stats.Dependencies)
+		body := fmt.Sprintf("Added: %d\nAlready present: %d\nProvider adapted: %d\nHistory dependencies: %d", stats.Added, stats.Skipped, stats.Adapted, stats.Dependencies)
 		if selectedLanguage == chinese {
-			body = fmt.Sprintf("已添加：%d\n相同记录已跳过：%d\n历史依赖：%d", stats.Added, stats.Skipped, stats.Dependencies)
+			body = fmt.Sprintf("已添加：%d\n历史已存在：%d\n已适配本机 provider：%d\n历史依赖：%d", stats.Added, stats.Skipped, stats.Adapted, stats.Dependencies)
 		}
+		body += "\n" + translate(selectedLanguage, "导入后重新启动 Codex，再打开对话。", "Restart Codex after importing, then open the conversation.")
 		return resultMsg{title: translate(selectedLanguage, "导入完成", "Import complete"), body: body, action: importAction, err: err}
 	}
 }

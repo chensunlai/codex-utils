@@ -399,7 +399,7 @@ func (m model) View() string {
 			if m.pendingCwd != "" {
 				body.WriteString(translate(m.language, "本机工作目录：", "Local working directory: ") + compactPath(m.pendingCwd, contentWidth-4) + "\n")
 			}
-			body.WriteString(translate(m.language, "已有对话不会被覆盖，相同记录会跳过。\n", "Existing conversations are preserved; identical records are skipped.\n"))
+			body.WriteString(translate(m.language, "已有对话不会被覆盖，相同历史不会重复添加。\n", "Existing conversations are preserved; matching history is not duplicated.\n"))
 		} else {
 			body.WriteString(translate(m.language, "恢复：", "Restore: ") + compactPath(m.pendingBackup, contentWidth-9) + "\n")
 		}

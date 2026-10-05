@@ -41,6 +41,7 @@ type rolloutHeader struct {
 		Provider     string          `json:"model_provider"`
 		Model        string          `json:"model"`
 		Source       json.RawMessage `json:"source"`
+		ThreadSource string          `json:"thread_source"`
 		CLIVersion   string          `json:"cli_version"`
 		ForkedFromID string          `json:"forked_from_id"`
 		HistoryMode  string          `json:"history_mode"`
@@ -58,9 +59,10 @@ type sessionFile struct {
 
 type sessionRecord struct {
 	Session
-	Files   []*sessionFile
-	Primary *sessionFile
-	Index   map[string]any
+	Files    []*sessionFile
+	Primary  *sessionFile
+	Index    map[string]any
+	Internal bool
 }
 
 func ListSessions(paths Paths) ([]Session, error) {
@@ -70,6 +72,9 @@ func ListSessions(paths Paths) ([]Session, error) {
 	}
 	sessions := make([]Session, 0, len(catalog))
 	for _, record := range catalog {
+		if record.Internal {
+			continue
+		}
 		sessions = append(sessions, record.Session)
 	}
 	sort.Slice(sessions, func(i, j int) bool {
@@ -135,6 +140,18 @@ func readSessionCatalog(paths Paths) (map[string]*sessionRecord, error) {
 			}
 		}
 		meta := record.Primary.Header.Payload
+		threadSource := databaseString(row["thread_source"])
+		if threadSource == "" {
+			threadSource = meta.ThreadSource
+		}
+		source := databaseString(row["source"])
+		if source == "" {
+			source = string(meta.Source)
+		}
+		var sourceObject map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(source), &sourceObject)
+		_, subagent := sourceObject["subagent"]
+		record.Internal = (threadSource != "" && threadSource != "user") || subagent
 		record.Cwd = meta.Cwd
 		record.HistoryMode = meta.HistoryMode
 		record.ForkedFromID = meta.ForkedFromID
@@ -143,6 +160,8 @@ func readSessionCatalog(paths Paths) (map[string]*sessionRecord, error) {
 		if title := valueString(record.Index["thread_name"]); title != "" {
 			record.Title = title
 		} else if title := databaseString(row["title"]); title != "" {
+			record.Title = title
+		} else if title := databaseString(row["first_user_message"]); title != "" {
 			record.Title = title
 		}
 		if timestamp, ok := unixTimestamp(row["updated_at"]); ok {
