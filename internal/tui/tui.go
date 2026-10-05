@@ -396,9 +396,11 @@ func (m model) View() string {
 		} else if m.pendingAction == importAction {
 			body.WriteString(translate(m.language, "从 ZIP 添加对话：", "Add conversations from ZIP: ") + "\n")
 			body.WriteString(compactPath(m.pendingZIP, contentWidth-4) + "\n")
-			if m.pendingCwd != "" {
-				body.WriteString(translate(m.language, "本机工作目录：", "Local working directory: ") + compactPath(m.pendingCwd, contentWidth-4) + "\n")
+			workspace := m.pendingCwd
+			if workspace == "" {
+				workspace = "~"
 			}
+			body.WriteString(translate(m.language, "本机工作目录：", "Local working directory: ") + compactPath(workspace, contentWidth-4) + "\n")
 			body.WriteString(translate(m.language, "已有对话不会被覆盖，相同历史不会重复添加。\n", "Existing conversations are preserved; matching history is not duplicated.\n"))
 		} else {
 			body.WriteString(translate(m.language, "恢复：", "Restore: ") + compactPath(m.pendingBackup, contentWidth-9) + "\n")

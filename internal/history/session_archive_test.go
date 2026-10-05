@@ -45,6 +45,7 @@ func transferTestRollout(t *testing.T, paths Paths, id, filename string, ordinal
 		"id": id, "timestamp": "2026-10-05T08:00:00Z", "cwd": `C:\Users\source\project`,
 		"model_provider": "source-provider", "model": "source-model", "source": "cli",
 		"history_mode": "paginated", "cli_version": "0.160.0",
+		"runtime_workspace_roots": []string{`C:\Users\source\project`},
 	}
 	if base != nil {
 		payload["history_base"] = base

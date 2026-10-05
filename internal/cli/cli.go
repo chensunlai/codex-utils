@@ -178,7 +178,7 @@ func runExport(paths history.Paths, args []string) int {
 func runImport(paths history.Paths, args []string) int {
 	flags := flag.NewFlagSet("import", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	cwd := flags.String("cwd", "", "working directory for imported conversations on this machine")
+	cwd := flags.String("cwd", "", "local working directory and workspace root (default ~)")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}

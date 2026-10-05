@@ -512,11 +512,12 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 	if err != nil {
 		return stats, err
 	}
-	if cwd != "" {
-		cwd, err = expandPath(cwd)
-		if err != nil {
-			return stats, err
-		}
+	if cwd == "" {
+		cwd = "~"
+	}
+	cwd, err = expandPath(cwd)
+	if err != nil {
+		return stats, err
 	}
 	stage, err := os.MkdirTemp("", "codex-sessions-import-*")
 	if err != nil {
@@ -608,10 +609,10 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 		}
 		register[session.ID] = session
 	}
-	if err := relocateSessionCwd(stage, manifest, cwd); err != nil {
+	reindex, err := relocateSessionCwd(stage, manifest, cwd)
+	if err != nil {
 		return stats, err
 	}
-	reindex := make(map[string]bool)
 	for _, session := range manifest.Sessions {
 		for _, name := range session.Files {
 			header, err := readSessionHeader(filepath.Join(stage, filepath.FromSlash(name)))
@@ -625,7 +626,7 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 			original := originalLocations[name]
 			baseBefore, _ := json.Marshal(original.Header.Payload.HistoryBase)
 			baseAfter, _ := json.Marshal(meta.Payload.HistoryBase)
-			if original.Length != len(header) || original.Header.Payload.Cwd != meta.Payload.Cwd || !bytes.Equal(baseBefore, baseAfter) {
+			if original.Length != len(header) || !bytes.Equal(baseBefore, baseAfter) {
 				reindex[session.ID] = true
 			}
 		}
@@ -777,7 +778,7 @@ func ImportSessions(paths Paths, archivePath, cwd string) (stats ImportStats, re
 		if err != nil {
 			return stats, err
 		}
-		if bytes.Equal(before, after) {
+		if bytes.Equal(before, after) && sameFileContents(file.Path, stagedPath) {
 			continue
 		}
 		input, err := os.Open(file.Path)
@@ -860,45 +861,90 @@ func sameSessionFiles(existing []*sessionFile, names []string, checksums map[str
 }
 
 func sameSessionHistory(first, second string) bool {
-	var hashes [][]byte
-	var headers [][]byte
-	for _, filePath := range []string{first, second} {
-		file, err := os.Open(filePath)
-		if err != nil {
+	left, err := os.Open(first)
+	if err != nil {
+		return false
+	}
+	defer left.Close()
+	right, err := os.Open(second)
+	if err != nil {
+		return false
+	}
+	defer right.Close()
+	a, b := bufio.NewReader(left), bufio.NewReader(right)
+	for {
+		firstLine, firstErr := a.ReadBytes('\n')
+		secondLine, secondErr := b.ReadBytes('\n')
+		if firstErr != nil && firstErr != io.EOF || secondErr != nil && secondErr != io.EOF {
 			return false
 		}
-		reader := bufio.NewReader(file)
-		line, err := reader.ReadBytes('\n')
-		if err != nil && err != io.EOF {
-			_ = file.Close()
-			return false
+		if !bytes.Equal(firstLine, secondLine) {
+			firstMeta, firstOK := portableSessionMetadata(firstLine)
+			secondMeta, secondOK := portableSessionMetadata(secondLine)
+			if !firstOK || !secondOK || !bytes.Equal(firstMeta, secondMeta) {
+				return false
+			}
 		}
-		neutral, err := providerNeutralHeader(line, "")
-		var header map[string]any
-		if err != nil || json.Unmarshal(neutral, &header) != nil {
-			_ = file.Close()
-			return false
+		if firstErr == io.EOF || secondErr == io.EOF {
+			return firstErr == secondErr
 		}
-		payload := header["payload"].(map[string]any)
-		delete(payload, "cwd")
+	}
+}
+
+// Only runtime location metadata may differ after importing. Messages, tools,
+// other settings, history ownership and ordinal cutoffs must still match.
+func portableSessionMetadata(line []byte) ([]byte, bool) {
+	var record map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.UseNumber()
+	if decoder.Decode(&record) != nil {
+		return nil, false
+	}
+	payload, _ := record["payload"].(map[string]any)
+	if payload == nil {
+		return nil, false
+	}
+	switch record["type"] {
+	case "session_meta":
+		delete(payload, "model_provider")
 		if base, ok := payload["history_base"].(map[string]any); ok {
 			delete(base, "end_byte_offset")
 		}
-		encoded, err := marshalCompactJSON(header)
+	case "turn_context":
+	case "event_msg":
+		if payload["type"] != "thread_settings_applied" {
+			return nil, false
+		}
+		payload, _ = payload["thread_settings"].(map[string]any)
+		if payload == nil {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	for _, key := range []string{"cwd", "runtime_workspace_roots", "workspace_roots"} {
+		delete(payload, key)
+	}
+	encoded, err := marshalCompactJSON(record)
+	return encoded, err == nil
+}
+
+func sameFileContents(first, second string) bool {
+	var hashes [][]byte
+	for _, name := range []string{first, second} {
+		file, err := os.Open(name)
 		if err != nil {
-			_ = file.Close()
 			return false
 		}
-		headers = append(headers, encoded)
 		hash := sha256.New()
-		_, err = io.Copy(hash, reader)
+		_, err = io.Copy(hash, file)
 		_ = file.Close()
 		if err != nil {
 			return false
 		}
 		hashes = append(hashes, hash.Sum(nil))
 	}
-	return bytes.Equal(headers[0], headers[1]) && bytes.Equal(hashes[0], hashes[1])
+	return bytes.Equal(hashes[0], hashes[1])
 }
 
 func writeNewFile(target string, input io.Reader) (retErr error) {

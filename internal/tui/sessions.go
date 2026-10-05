@@ -157,7 +157,7 @@ func (m model) pathInputView(width int) string {
 			help = translate(m.language, "Enter 继续  Ctrl+u 清空  Esc 返回", "Enter continue  Ctrl+u clear  Esc back")
 		} else {
 			title = translate(m.language, "本机工作目录（可选）", "Local working directory (optional)")
-			help = translate(m.language, "留空保留原目录；Enter 继续  Esc 返回", "Leave empty to retain the original directory; Enter continue  Esc back")
+			help = translate(m.language, "留空使用本机 ~；Enter 继续  Esc 返回", "Leave empty to use local ~; Enter continue  Esc back")
 		}
 	}
 	return titleStyle.Render(title) + "\n\n" + compactPath(string(m.pathValue), width-4) + "_\n\n" + mutedStyle.Render(help)
