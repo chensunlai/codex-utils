@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/chensunlai/codex-utils)](https://github.com/chensunlai/codex-utils/releases/latest)
 [![License](https://img.shields.io/github/license/chensunlai/codex-utils)](LICENSE)
 
-`codex-utils` 是一个 Codex 本地工具箱。目前提供历史数据修补功能：将 `config.toml` 中正在使用的 `model_provider` 和 `model` 同步到历史数据库、会话 JSONL 与全局索引。
+`codex-utils` 是一个 Codex 本地工具箱，提供历史数据修补和对话迁移功能：同步模型元数据，或将指定对话打包为 ZIP，在其他机器上追加恢复。
 
 程序默认打开键盘操作的终端界面，同时提供适合脚本和自动化的子命令。Release 是独立二进制文件，Windows CMD、PowerShell、Linux/Ubuntu 和 macOS 用户不需要安装 Go、Python 或其他运行时。
 
@@ -46,6 +46,47 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.gi
 
 主界面包含状态检查、试运行、正式修补、手动备份和选择备份恢复。正式修补前一定会先创建备份。
 
+主菜单还提供 **导出对话** 和 **导入对话**。导出列表中按 `Space` 勾选多个对话，`a` 全选或清空，`Enter` 输入 ZIP 保存路径；未勾选时会导出当前选中的对话。导入时输入 ZIP 路径，可选填写本机工作目录，再确认添加。路径输入支持粘贴、退格和 `Ctrl+u` 清空。
+
+## 对话归档与跨机恢复
+
+先关闭正在使用这些对话的 Codex 进程，再导出或导入。
+
+```bash
+# 查看会话 ID 和标题
+codex-utils list-sessions
+
+# 导出一个对话
+codex-utils export -o conversation.zip <session-id>
+
+# 将多个对话放入同一个 ZIP
+codex-utils export -o conversations.zip <session-id-1> <session-id-2>
+```
+
+将 ZIP 手动复制到另一台 Windows、Linux 或 macOS 机器，然后运行：
+
+```bash
+# 向目标机器添加对话
+codex-utils import conversations.zip
+
+# 可选：指定目标数据目录，以及这些对话在本机对应的项目目录
+codex-utils --codex-home /path/to/.codex import --cwd /path/to/project conversations.zip
+```
+
+Windows PowerShell 中也可以使用本机路径：
+
+```powershell
+codex-utils import --cwd 'D:\Projects\my-project' '.\conversations.zip'
+```
+
+ZIP 包含所选对话的全部 rollout 文件、索引元数据以及对应的 SQLite 会话记录。分页历史的 `history_base` 依赖会递归收集，因此导出 fork 时，包内也会包含其依赖源会话的完整历史和分段文件。导入时这些依赖会一起添加；结果会显示依赖数量。
+
+JSONL 原始字节保持不变，以保留 fork 引用的字节偏移；数据库和索引中的 rollout 路径会转换为目标机器的路径。`--cwd` 调整导入记录在数据库和索引中的工作目录，历史正文里的原始路径仍保留。已归档的源会话导入后会放入活动会话目录。
+
+导入采用追加方式：已有会话与包内文件完全相同时会跳过；同 ID 的历史内容不同时，会拒绝整次导入，不覆盖本机记录。导出也不会覆盖已有 ZIP，且不会删除源会话。
+
+ZIP 不包含 `config.toml`、登录凭据、项目文件或外部附件。目标 Codex 应使用相同版本或支持源会话历史格式的版本。导入前会校验所有 ZIP 成员、SHA-256、数据库和 fork 依赖；不接受越界路径、链接或未声明的文件。
+
 ## 修补内容
 
 Codex 历史元数据通常位于：
@@ -79,6 +120,9 @@ codex-utils backup                       只创建备份
 codex-utils list-backups                 列出备份
 codex-utils restore latest               恢复最新备份
 codex-utils restore <backup.tar.gz>       恢复指定备份
+codex-utils list-sessions                 列出会话 ID 和标题
+codex-utils export -o <zip> <id> [id...]   导出所选对话及 fork 历史依赖
+codex-utils import [--cwd <path>] <zip>   从 ZIP 追加恢复对话
 codex-utils version                      查看版本
 ```
 

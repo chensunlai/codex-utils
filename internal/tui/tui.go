@@ -18,6 +18,8 @@ const (
 	menuScreen
 	backupsScreen
 	confirmScreen
+	sessionsScreen
+	pathScreen
 )
 
 type language int
@@ -35,6 +37,8 @@ const (
 	repairAction
 	backupAction
 	restoreAction
+	exportAction
+	importAction
 	languageAction
 	quitAction
 )
@@ -53,6 +57,8 @@ func localizedMenuItems(selected language) []menuItem {
 			{label: "修复历史记录", description: "备份并同步全部历史元数据", action: repairAction},
 			{label: "创建备份", description: "只备份历史记录，不进行修复", action: backupAction},
 			{label: "恢复备份", description: "选择一个已有备份进行恢复", action: restoreAction},
+			{label: "导出对话", description: "选择一个或多个对话，打包为 ZIP", action: exportAction},
+			{label: "导入对话", description: "从 ZIP 向本机添加对话", action: importAction},
 			{label: "切换语言", description: "简体中文 / English", action: languageAction},
 			{label: "退出", description: "退出 codex-utils", action: quitAction},
 		}
@@ -63,6 +69,8 @@ func localizedMenuItems(selected language) []menuItem {
 		{label: "Repair history", description: "Back up and synchronize all metadata", action: repairAction},
 		{label: "Create backup", description: "Archive history without changing it", action: backupAction},
 		{label: "Restore backup", description: "Choose an archive to restore", action: restoreAction},
+		{label: "Export conversations", description: "Select conversations to pack into a ZIP", action: exportAction},
+		{label: "Import conversations", description: "Add conversations from a ZIP", action: importAction},
 		{label: "Language", description: "简体中文 / English", action: languageAction},
 		{label: "Quit", description: "Leave codex-utils", action: quitAction},
 	}
@@ -92,6 +100,13 @@ type model struct {
 	backups       []string
 	pendingAction action
 	pendingBackup string
+	sessions      []history.Session
+	selected      map[string]bool
+	pathValue     []rune
+	pathPurpose   action
+	pathStep      int
+	pendingZIP    string
+	pendingCwd    string
 }
 
 type resultMsg struct {
@@ -99,6 +114,7 @@ type resultMsg struct {
 	body       string
 	inspection history.Inspection
 	backups    []string
+	sessions   []history.Session
 	action     action
 	err        error
 }
@@ -152,6 +168,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = backupsScreen
 				m.cursor = 0
 			}
+			if typed.action == exportAction && typed.sessions != nil {
+				m.sessions = typed.sessions
+				m.selected = make(map[string]bool)
+				m.screen = sessionsScreen
+				m.cursor = 0
+			}
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -171,6 +193,12 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.busy {
 		return m, nil
 	}
+	if m.screen == sessionsScreen {
+		return m.handleSessionKey(keyName)
+	}
+	if m.screen == pathScreen {
+		return m.handlePathKey(key)
+	}
 	if m.screen == confirmScreen {
 		switch keyName {
 		case "y", "Y", "enter":
@@ -181,6 +209,11 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.messageTitle = translate(m.language, "修复", "Repair")
 				m.message = translate(m.language, "正在同步历史记录...", "Synchronizing history...")
 				return m, syncCommand(m.paths, false, m.language)
+			}
+			if m.pendingAction == importAction {
+				m.messageTitle = translate(m.language, "导入", "Import")
+				m.message = translate(m.language, "正在添加对话...", "Adding conversations...")
+				return m, importCommand(m.paths, m.pendingZIP, m.pendingCwd, m.language)
 			}
 			m.messageTitle = translate(m.language, "恢复", "Restore")
 			m.message = translate(m.language, "正在恢复所选备份...", "Restoring selected backup...")
@@ -259,6 +292,18 @@ func (m model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.messageTitle = translate(m.language, "备份", "Backups")
 			m.message = translate(m.language, "正在读取备份列表...", "Loading backup list...")
 			return m, listBackupsCommand(m.paths, m.language)
+		case exportAction:
+			m.busy = true
+			m.messageError = false
+			m.messageTitle = translate(m.language, "对话", "Conversations")
+			m.message = translate(m.language, "正在读取对话列表...", "Loading conversations...")
+			return m, listSessionsCommand(m.paths, m.language)
+		case importAction:
+			m.screen = pathScreen
+			m.pathPurpose = importAction
+			m.pathStep = 0
+			m.pathValue = nil
+			m.pendingCwd = ""
 		case languageAction:
 			m.screen = languageScreen
 			m.cursor = int(m.language)
@@ -348,6 +393,13 @@ func (m model) View() string {
 				"更新历史元数据前会自动创建备份。\n",
 				"A backup will be created before history metadata is updated.\n",
 			))
+		} else if m.pendingAction == importAction {
+			body.WriteString(translate(m.language, "从 ZIP 添加对话：", "Add conversations from ZIP: ") + "\n")
+			body.WriteString(compactPath(m.pendingZIP, contentWidth-4) + "\n")
+			if m.pendingCwd != "" {
+				body.WriteString(translate(m.language, "本机工作目录：", "Local working directory: ") + compactPath(m.pendingCwd, contentWidth-4) + "\n")
+			}
+			body.WriteString(translate(m.language, "已有对话不会被覆盖，相同记录会跳过。\n", "Existing conversations are preserved; identical records are skipped.\n"))
 		} else {
 			body.WriteString(translate(m.language, "恢复：", "Restore: ") + compactPath(m.pendingBackup, contentWidth-9) + "\n")
 		}
@@ -383,6 +435,10 @@ func (m model) View() string {
 				"Enter restore  Esc back",
 			)))
 		}
+	case sessionsScreen:
+		body.WriteString(m.sessionSelectionView(contentWidth))
+	case pathScreen:
+		body.WriteString(m.pathInputView(contentWidth))
 	default:
 		for index, item := range localizedMenuItems(m.language) {
 			prefix := "  "

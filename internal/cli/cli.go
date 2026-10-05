@@ -13,7 +13,7 @@ import (
 	"golang.org/x/term"
 )
 
-const usage = `codex-utils repairs Codex history model metadata.
+const usage = `codex-utils repairs and transfers Codex conversation history.
 
 Usage:
   codex-utils                              Open the interactive TUI
@@ -23,6 +23,9 @@ Usage:
   codex-utils backup                       Create a backup archive
   codex-utils list-backups                 List backup archives
   codex-utils restore <path|latest>         Restore a backup archive
+  codex-utils list-sessions                 List conversations and their IDs
+  codex-utils export -o <zip> <id> [id...]   Export conversations and fork dependencies
+  codex-utils import [--cwd <path>] <zip>   Add conversations from an exported ZIP
   codex-utils version                      Print version information
 
 Global options:
@@ -127,10 +130,67 @@ func Run(args []string) int {
 		absolute, _ := filepath.Abs(backup)
 		fmt.Printf("Restored: %s\n", absolute)
 		return 0
+	case "list-sessions":
+		if len(commandArgs) != 0 {
+			return fail(fmt.Errorf("list-sessions does not accept arguments"))
+		}
+		sessions, err := history.ListSessions(paths)
+		if err != nil {
+			return fail(err)
+		}
+		if len(sessions) == 0 {
+			fmt.Println("No conversations found.")
+		}
+		for _, session := range sessions {
+			fmt.Printf("%s  %s  %s\n", session.ID, session.UpdatedAt, session.Title)
+		}
+		return 0
+	case "export":
+		return runExport(paths, commandArgs)
+	case "import":
+		return runImport(paths, commandArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n\n%s", command, usage)
 		return 2
 	}
+}
+
+func runExport(paths history.Paths, args []string) int {
+	flags := flag.NewFlagSet("export", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	var output string
+	flags.StringVar(&output, "output", "", "output ZIP path")
+	flags.StringVar(&output, "o", "", "output ZIP path")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(output) == "" || flags.NArg() == 0 {
+		return fail(fmt.Errorf("usage: codex-utils export -o <archive.zip> <id> [id...]"))
+	}
+	stats, err := history.ExportSessions(paths, flags.Args(), output)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Printf("Exported: %s\nConversations selected: %d\nHistory dependencies:  %d\nRollout files:         %d\n", stats.Path, stats.Selected, stats.Dependencies, stats.Files)
+	return 0
+}
+
+func runImport(paths history.Paths, args []string) int {
+	flags := flag.NewFlagSet("import", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	cwd := flags.String("cwd", "", "working directory for imported conversations on this machine")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		return fail(fmt.Errorf("usage: codex-utils import [--cwd <path>] <archive.zip>"))
+	}
+	stats, err := history.ImportSessions(paths, flags.Arg(0), *cwd)
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Printf("Conversations added: %d\nIdentical skipped:   %d\nHistory dependencies: %d\n", stats.Added, stats.Skipped, stats.Dependencies)
+	return 0
 }
 
 func parseGlobalOptions(args []string) (string, []string, error) {

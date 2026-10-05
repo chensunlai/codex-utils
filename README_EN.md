@@ -6,7 +6,7 @@ English | [简体中文](README.md)
 [![Release](https://img.shields.io/github/v/release/chensunlai/codex-utils)](https://github.com/chensunlai/codex-utils/releases/latest)
 [![License](https://img.shields.io/github/license/chensunlai/codex-utils)](LICENSE)
 
-`codex-utils` is a local Codex toolkit. Its first utility repairs history metadata by synchronizing the active `model_provider` and `model` from `config.toml` into the history database, rollout JSONL files, and global session index.
+`codex-utils` is a local Codex toolkit for repairing history metadata and transferring conversations. Synchronize model metadata, or pack selected conversations into a ZIP and add them on another machine.
 
 The standalone release binaries run in Windows CMD, PowerShell, Linux/Ubuntu, and macOS without Go, Python, or another runtime. Running the command without arguments opens an interactive terminal UI; subcommands are available for scripts.
 
@@ -46,6 +46,33 @@ The first screen lets you choose **简体中文** or **English**.
 
 The main menu provides status inspection, a dry-run preview, history repair, manual backup, and backup restore. A repair always creates a backup first.
 
+**Export conversations** supports multiple selection: `Space` toggles a conversation, `a` selects all or clears the selection, and `Enter` opens the output ZIP path prompt. With no checked items, Enter exports the highlighted conversation. **Import conversations** asks for a ZIP path, an optional local working directory, and confirmation. Path prompts support paste, backspace, and `Ctrl+u` to clear.
+
+## Transfer conversations between machines
+
+Close Codex processes using the conversations before exporting or importing.
+
+```bash
+codex-utils list-sessions
+codex-utils export -o conversation.zip <session-id>
+codex-utils export -o conversations.zip <session-id-1> <session-id-2>
+```
+
+Manually copy the ZIP to another Windows, Linux, or macOS machine:
+
+```bash
+codex-utils import conversations.zip
+codex-utils --codex-home /path/to/.codex import --cwd /path/to/project conversations.zip
+```
+
+The ZIP contains all rollout files for the selected conversations, their index metadata, and their SQLite conversation records. Paginated `history_base` dependencies are collected recursively. Exporting a fork also includes the complete source conversations and rollout segments it depends on; these conversations are added during import. The result reports the dependency count.
+
+Rollout bytes are preserved exactly so fork byte offsets remain valid. Database and index rollout paths are rewritten for the destination machine. `--cwd` updates the working directory in imported database and index records; original paths in the conversation history remain intact. Archived source conversations are imported into the active sessions directory.
+
+Import adds conversations: identical existing files are skipped, while conflicting history under the same ID rejects the entire import without replacing local records. Export refuses an existing output ZIP and leaves the source conversations in place.
+
+Archives exclude configuration, login credentials, project files, and external attachments. Use the same Codex version or one that supports the source history format. Import validates all ZIP members, SHA-256 checksums, databases, and fork dependencies before adding data; traversal paths, links, and undeclared files are rejected.
+
 ## What it repairs
 
 Codex history metadata is normally stored in:
@@ -73,6 +100,9 @@ codex-utils backup                       Create a backup only
 codex-utils list-backups                 List backups
 codex-utils restore latest               Restore the newest backup
 codex-utils restore <backup.tar.gz>       Restore a selected backup
+codex-utils list-sessions                 List conversation IDs and titles
+codex-utils export -o <zip> <id> [id...]   Export conversations and fork dependencies
+codex-utils import [--cwd <path>] <zip>   Add conversations from an exported ZIP
 codex-utils version                      Show version information
 ```
 
